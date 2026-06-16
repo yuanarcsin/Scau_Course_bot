@@ -1,21 +1,27 @@
 # 华农教务系统自动选课
 
-华南农业大学正方教务系统 V9.0 自动选课脚本。通过 CDP（Chrome DevTools Protocol）控制 Edge 浏览器，在选课窗口开启瞬间自动提交购物车。
+华南农业大学正方教务系统 V9.0 自动选课脚本。纯 HTTP 请求方案，无需浏览器，通过 RSA 加密登录后直接调用 API 完成一键选课。
 
-目前只支持6.18对于资环等三个学院大一本科生的抢课，并且还未实战验证可行性，项目仅供学习参考，出现任何问题后果自负。
+项目仅供学习参考，出现任何问题后果自负。
+
+## 借鉴项目
+
+- [new-school-sdk](https://github.com/FarmerChillax/new-school-sdk) — 参考了 `requests.Session` 会话管理、RSA 密码加密（PyRsa 模块）以及正方教务系统的登录流程
+- [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective) — 参考了 HTTP 客户端设计模式、Session cookie 持久化以及选课 API 的调用方式
 
 ## 原理
 
-1. 脚本通过 CDP 连接已登录的教务系统页面，复用浏览器登录态
-2. 支持自动加购物车（`--cart`）或手动加好后仅自动提交
-3. 实时倒计时等待选课窗口开启，到点立即模拟点击提交按钮
-4. 断线自动重连，提交失败自动重试
+1. 直接 HTTP POST 登录教务系统（RSA 加密密码），获取 Session
+2. 通过 PartDisplay API 查询所有可选课程，按教学班编号精确匹配目标
+3. 提取服务器选课开始时间，实时倒计时
+4. 窗口开启时调用 Quickly API 一键选课（支持多门课程批量提交）
+
+相比旧版 CDP（Chrome DevTools Protocol）方案，无需启动浏览器、无需 WebSocket，更稳定、更快速。
 
 ## 环境要求
 
 - Python 3.10+
-- Microsoft Edge 浏览器
-- Windows 系统
+- 能访问华农教务系统的网络环境（校园网或 VPN）
 
 ## 安装
 
@@ -28,58 +34,47 @@ pip install -r requirements.txt
 修改 [course_bot/config.py](course_bot/config.py) 中的配置项：
 
 ```python
-# 账号（选填，手动登录则无需填写）
-student_id: str = ""
-password: str = ""
+# 账号
+student_id: str = "你的学号"
+password: str = "你的密码"
 
-# 目标课程：tab_keyword 为侧边栏 tab 名，jxbbh 为教学班编号
+# 目标课程：jxbbh 为教学班编号，kklxdm 为课程类型代码
+# 体育=06, 大学英语=09, 专业课=01, 通识=05 等
 target_courses: list = field(default_factory=lambda: [
-    {"tab_keyword": "体育",   "jxbbh": "202620271-610023-001-乒乓球02"},
-    {"tab_keyword": "大学英语", "jxbbh": "202620271-604792-005"},
+    {"jxbbh": "202620271-610023-001-乒乓球02", "kklxdm": "06"},
+    {"jxbbh": "202620271-604792-005",         "kklxdm": "09"},
 ])
 
-# 选课时间窗口（建议比官方时间早 5 秒以补偿延迟）
+# 教务系统地址（默认外网，校园网可用内网 10.42.100.1）
+base_url: str = "https://jwzf.scau.edu.cn"
+
+# 选课时间窗口（优先使用服务器端时间，此处为兜底配置）
 window_open: str = "2026-06-18 12:29:55"
-window_close: str = "2026-06-22 23:59:59"
 ```
 
-> **如何找到 jxbbh（教学班编号）？** 在教务系统"自主选课"页面，搜索目标课程，课程名称旁边显示的那串编号即为 jxbbh。
+> **如何找到 jxbbh？** 在教务系统"自主选课"页面，搜索目标课程，课程名称旁边显示的那串编号即为 jxbbh。
 
 ## 使用
 
-### 方式一：手动加购物车，脚本自动提交（推荐）
-
-1. 手动打开 Edge，登录教务系统，进入"自主选课"页面，将课程加入购物车
-2. 运行脚本：
-
 ```bash
-python course_bot/main.py
-```
+# 自动匹配课程 + 等窗口一键选课
+python -m course_bot.main
 
-### 方式二：脚本自动加购物车并提交
-
-```bash
-python course_bot/main.py --cart
-```
-
-### 自定义选课时间
-
-```bash
-python course_bot/main.py --cart --window "2026-06-18 12:29:55"
+# 自定义选课时间
+python -m course_bot.main --window "2026-06-18 12:29:55"
 ```
 
 ## 运行流程
 
-1. 脚本自动检测或启动 Edge（调试模式），打开教务系统页面
-2. 如果 Edge 未登录，手动登录后按 Enter 继续
-3. 脚本连接教务页面，开始监控选课窗口
-4. 实时显示倒计时，到点自动提交
-5. 提交后显示结果汇总
+1. 脚本登录教务系统，获取 Session
+2. 查询可选课程列表，匹配目标课程
+3. 提取服务器端选课开始时间，精确倒计时
+4. 倒计时结束立即调用 Quickly API 一键选课
+5. 若服务器返回"时间未到"则自动轮询重试，最多 5 分钟
 
 ## 注意事项
 
-- 脚本不存储、不上传任何账号密码，所有操作在本地浏览器完成
-- CDP 端口默认为 9222，确保不被其他程序占用
-- 选课窗口时间建议设置比官方时间早 3-5 秒，补偿网络延迟
-- 提交阶段按 `Ctrl+C` 可安全退出
-- 仅支持 Edge 浏览器（Windows 自带）
+- 脚本仅在本地运行，不经过第三方服务器
+- 选课窗口时间以服务器端 `xkkssj` 为准，配置中的 `window_open` 仅为兜底
+- 按 `Ctrl+C` 可安全退出
+- 校园网环境建议使用内网地址 `http://10.42.100.1` 以获得更低延迟

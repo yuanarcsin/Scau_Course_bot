@@ -1,9 +1,15 @@
 """
-通信层 —— CDP 连接管理、浏览器启动、iframe 操作、API 调用。
+通信层 —— 基于 requests.Session 的直接 HTTP 请求，无 CDP 依赖。
 """
 
-import asyncio, json, os, subprocess, sys, time, urllib.request
-from config import Config
+import re, time
+from io import StringIO
+
+import requests
+from bs4 import BeautifulSoup
+
+from course_bot.config import Config
+from .PyRsa import RsaKey, Base64
 
 
 class ApiError(Exception):
@@ -11,299 +17,360 @@ class ApiError(Exception):
     pass
 
 
-# ================================================================
-# 浏览器启动 & CDP 检查
-# ================================================================
-
-def check_cdp(port: int = 9222) -> bool:
-    """检查 CDP 端口是否可用"""
-    try:
-        urllib.request.urlopen(f"http://127.0.0.1:{port}/json/list", timeout=3)
-        return True
-    except Exception:
-        return False
-
-
-def launch_browser(config: Config):
-    """启动 Edge 并打开教务页面"""
-    print("[启动] 正在启动 Edge（调试模式）...")
-
-    # 先关掉所有 Edge
-    if sys.platform == "win32":
-        subprocess.run("taskkill /F /IM msedge.exe 2>nul", shell=True)
-    time.sleep(2)
-
-    # Edge 常见路径
-    edge_paths = [
-        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
-        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
-    ]
-    edge = None
-    for p in edge_paths:
-        if os.path.exists(p):
-            edge = p
-            break
-    if not edge:
-        raise RuntimeError("未找到 Edge 浏览器")
-
-    login_url = (
-        f"{config.base_url}/jwglxt/xtgl/index_initMenu.html?jsdm=xs"
-    )
-    subprocess.Popen(
-        [edge, f"--remote-debugging-port={config.cdp_port}", login_url],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-    # 等待浏览器启动
-    for _ in range(15):
-        time.sleep(1)
-        if check_cdp(config.cdp_port):
-            print("[启动] Edge 已就绪，请登录教务系统并进入'自主选课'页面")
-            return
-    raise RuntimeError("Edge 启动超时")
-
-
-def ensure_cdp(config: Config):
-    """确保 CDP 可用，否则自动启动浏览器"""
-    if check_cdp(config.cdp_port):
-        print("[CDP] 连接正常")
-        return
-    print("[CDP] 端口不可达，自动启动浏览器...")
-    launch_browser(config)
-    print("[CDP] 请在浏览器中登录并导航到'自主选课'页面后按 Enter 继续...")
-    input()
+class LoginError(Exception):
+    """登录异常"""
+    pass
 
 
 # ================================================================
-# CDP 客户端
+# HTTP 客户端
 # ================================================================
 
 class Client:
-    """教务系统通信客户端（基于 CDP）"""
+    """教务系统 HTTP 客户端，基于 requests.Session 保持登录态"""
+
+    # 正方教务系统固定端点
+    LOGIN_PAGE      = "/jwglxt/xtgl/login_slogin.html"
+    PUBLIC_KEY      = "/jwglxt/xtgl/login_getPublicKey.html"
+    INDEX_PAGE      = "/jwglxt/xtgl/index_initMenu.html"
+
+    # 选课相关端点
+    XK_INDEX        = "/jwglxt/xsxk/zzxkyzbjk_cxZzxkYzbIndex.html"
+    XK_DISPLAY      = "/jwglxt/xsxk/zzxkyzb_cxZzxkYzbDisplay.html"
+    XK_PART_DISPLAY = "/jwglxt/xsxk/zzxkyzb_cxZzxkYzbPartDisplay.html"
+    XK_CHECK_CART   = "/jwglxt/xsxk/zzxkyzb_cxCheckZyZzxkYzbInCart.html"
+    XK_ADD_CART     = "/jwglxt/xsxk/zzxkyzbjk_xkBcZyZzxkYzbToCart.html"
+    XK_QUERY_CART   = "/jwglxt/xsxk/zzxkyzb_cxWdgwcZzxkYzb.html"
+    XK_QUICKLY      = "/jwglxt/xsxk/zzxkyzb_xkZzxkyzbQuickly.html"
+    XK_SUBMIT       = "/jwglxt/xsxk/zzxkyzbjk_xkBcZyZzxkYzb.html"
 
     def __init__(self, config: Config):
         self.config = config
-        self.ws = None
-        self._msg_id = 0
-        self._iframe_doc: str | None = None
+        self.session = requests.Session()
+        self.session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9",
+            "Accept-Encoding": "gzip, deflate",
+        })
+        self._csrf: str | None = None
+        self._page_params: dict | None = None
+        self._logged_in: bool = False
 
-    def _next_id(self) -> int:
-        self._msg_id += 1
-        return self._msg_id
+    # ============================================================
+    # 登录
+    # ============================================================
 
-    def _find_target(self) -> dict:
-        tabs = json.loads(urllib.request.urlopen(
-            f"http://127.0.0.1:{self.config.cdp_port}/json/list"
-        ).read())
-        for t in tabs:
-            url = t.get("url", "")
-            if self.config.jw_host in url and self.config.page_keyword in url:
-                return t
-        raise ApiError(
-            "未找到教务页面，请确认已登录并进入教务系统\n"
-            + "\n".join(f"  {t['title'][:60]}" for t in tabs)
+    def login(self) -> bool:
+        """登录教务系统"""
+        base = self.config.base_url
+        print(f"[登录] 连接 {base} ...")
+
+        # Step 1: 获取登录页，提取 CSRF token
+        url = f"{base}{self.LOGIN_PAGE}"
+        resp = self.session.get(url, timeout=self.config.request_timeout)
+        resp.encoding = "utf-8"
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        csrf_input = soup.select_one("#csrftoken")
+        if not csrf_input:
+            raise LoginError("未找到 CSRF token，检查登录页是否正常")
+        self._csrf = csrf_input.get("value", "")
+        print(f"[登录] CSRF: {self._csrf[:20]}...")
+
+        # Step 2: 获取 RSA 公钥
+        t = int(time.time() * 1000)
+        key_url = f"{base}{self.PUBLIC_KEY}?time={t}&_={t}"
+        key_resp = self.session.get(key_url, timeout=self.config.request_timeout)
+        key_data = key_resp.json()
+        modulus = key_data.get("modulus", "")
+        exponent = key_data.get("exponent", "")
+        if not modulus or not exponent:
+            raise LoginError(f"获取公钥失败: {key_data}")
+
+        # Step 3: RSA 加密密码
+        b64 = Base64()
+        rsa = RsaKey()
+        rsa.set_public(b64.b64tohex(modulus), b64.b64tohex(exponent))
+        encrypted = rsa.rsa_encrypt(self.config.password)
+        mm = b64.hex2b64(encrypted)
+
+        # Step 4: 提交登录
+        login_url = f"{base}{self.LOGIN_PAGE}?time={t}"
+        login_resp = self.session.post(
+            login_url,
+            data={
+                "csrftoken": self._csrf,
+                "yhm": self.config.student_id,
+                "mm": mm,
+                "language": "zh_CN",
+            },
+            timeout=self.config.request_timeout,
+            allow_redirects=True,
         )
+        login_resp.encoding = "utf-8"
 
-    async def connect(self):
-        """连接浏览器"""
-        target = self._find_target()
-        print(f"[连接] {target['title']}")
-        import websockets
-        self.ws = await websockets.connect(target["webSocketDebuggerUrl"])
-        self._msg_id = 0
+        if self._check_logged_in(login_resp.text):
+            self._logged_in = True
+            print("[登录] 成功")
+            return True
 
-        rid1 = await self._send_cmd("Runtime.enable")
-        rid2 = await self._send_cmd("Network.enable")
-        done = set()
-        while len(done) < 2:
-            msg = await self._recv_raw()
-            if msg.get("id") in (rid1, rid2):
-                done.add(msg["id"])
+        err_soup = BeautifulSoup(login_resp.text, "html.parser")
+        tips = err_soup.select_one("#tips")
+        err_msg = tips.text.strip() if tips else "未知错误"
+        raise LoginError(f"登录失败: {err_msg}")
 
-        ok = await self._eval(
-            "document.querySelector('iframe[src*=\"zzxkyzb\"]') !== null"
-        )
-        if ok:
-            self._iframe_doc = (
-                "document.querySelector('iframe[src*=\"zzxkyzb\"]').contentDocument"
-            )
-            print("[连接] 选课 iframe 就绪")
-        else:
-            raise ApiError("未找到选课 iframe，请确认已进入'自主选课'页面")
+    def _check_logged_in(self, html: str) -> bool:
+        if f'value="{self.config.student_id}"' in html:
+            return True
+        if 'id="tips"' not in html:
+            return True
+        return False
 
-    async def reconnect(self):
-        """断线重连"""
-        print("[重连] ...")
+    def check_session(self) -> bool:
+        """检查 session 是否有效"""
         try:
-            await self.close()
+            url = f"{self.config.base_url}{self.INDEX_PAGE}"
+            resp = self.session.get(url, timeout=self.config.request_timeout)
+            return "login" not in resp.url.lower()
+        except Exception:
+            return False
+
+    # ============================================================
+    # 页面获取与参数提取
+    # ============================================================
+
+    def _url(self, path: str) -> str:
+        return f"{self.config.base_url}{path}"
+
+    def get(self, path: str, **kwargs) -> requests.Response:
+        kwargs.setdefault("timeout", self.config.request_timeout)
+        return self.session.get(self._url(path), **kwargs)
+
+    def post(self, path: str, data=None, **kwargs) -> requests.Response:
+        kwargs.setdefault("timeout", self.config.request_timeout)
+        return self.session.post(self._url(path), data=data, **kwargs)
+
+    def fetch_select_page(self) -> dict:
+        """获取选课主页面，提取隐藏参数和 tab 信息"""
+        url = (f"{self.XK_INDEX}?"
+               f"gnmkdm={self.config.gnmkdm}&layout=default&"
+               f"su={self.config.student_id}")
+        resp = self.get(url)
+        resp.encoding = "utf-8"
+
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        def gv(name: str) -> str:
+            el = soup.find(attrs={"id": name}) or soup.find(attrs={"name": name})
+            return el.get("value", "") if el else ""
+
+        # 服务器时间
+        server_now = gv("currentsj")  # 服务器当前时间
+        xkkssj = gv("xkkssj")         # 选课开始时间
+        xkjssj = gv("xkjssj")         # 选课结束时间
+
+        # 基础页面参数
+        params = {
+            "xkkssj":  xkkssj,
+            "xkjssj":  xkjssj,
+            "server_now": server_now,
+            "xkxnm":   gv("xkxnm") or "2026",
+            "xkxqm":   gv("xkxqm") or "3",
+            "xklc":    gv("xklc") or "1",
+            "rwlx":    gv("rwlx") or "3",
+            "rlkz":    gv("rlkz") or "0",
+            "rlzlkz":  gv("rlzlkz") or "1",
+            "cdrlkz":  gv("cdrlkz") or "0",
+            "xszxzt":  gv("xszxzt") or "1",
+            "xqh_id":  gv("xqh_id") or "3",
+            "jg_id":   gv("jg_id_1") or "14",
+            "njdm_id": gv("njdm_id") or "2025",
+            "zyh_id":  gv("zyh_id") or "",
+            "zyfx_id": gv("zyfx_id") or "wfx",
+            "bh_id":   gv("bh_id") or "",
+            "xh_id":   gv("xh_id") or "",
+            "bklx_id": gv("bklx_id") or "",
+            "kzkcgs":  gv("kzkcgs") or "0",
+            "sfkkjyxdxnxq": gv("sfkkjyxdxnxq") or "",
+        }
+
+        # 默认 tab (第一个 tab)
+        params["firstKklxdm"] = gv("firstKklxdm") or "06"
+        params["firstXkkzId"] = gv("firstXkkzId") or ""
+        params["firstXkkzXh"] = gv("firstXkkzXh") or ""
+        params["firstNjdmId"] = gv("firstNjdmId") or params["njdm_id"]
+        params["firstZyhId"]  = gv("firstZyhId") or params["zyh_id"]
+
+        # 提取所有 tab 信息 (nav-tabs 中的 tab)
+        tabs = {}
+        for tab_el in soup.select("a[id^='tab_kklx_']"):
+            tab_id = tab_el.get("id", "")
+            # tab 的 onclick 包含 queryCourse 调用
+            onclick = tab_el.get("onclick", "")
+            m = re.search(r"queryCourse\(this,'(\w+)','([^']+)','([^']+)','([^']+)','([^']+)'\)", onclick)
+            if m:
+                tabs[m.group(1)] = {
+                    "kklxdm":  m.group(1),
+                    "xkkz_id": m.group(2),
+                    "njdm_id": m.group(3),
+                    "zyh_id":  m.group(4),
+                    "xkkz_xh": m.group(5),
+                }
+
+        # 如果没找到 tabs，用 first 信息构造
+        if not tabs:
+            tabs[params["firstKklxdm"]] = {
+                "kklxdm":  params["firstKklxdm"],
+                "xkkz_id": params["firstXkkzId"],
+                "njdm_id": params["firstNjdmId"],
+                "zyh_id":  params["firstZyhId"],
+                "xkkz_xh": params["firstXkkzXh"],
+            }
+
+        params["_tabs"] = tabs
+        self._page_params = params
+
+        # 获取 Display 页面的选课时间窗口
+        first_tab = list(tabs.values())[0] if tabs else {
+            "kklxdm": "06",
+            "xkkz_id": params.get("firstXkkzId", ""),
+            "xkkz_xh": params.get("firstXkkzXh", ""),
+            "njdm_id": params.get("firstNjdmId", params.get("njdm_id", "")),
+            "zyh_id": params.get("firstZyhId", params.get("zyh_id", "")),
+        }
+        self._fetch_display_time(first_tab)
+
+        print(f"[页面] 学年={params['xkxnm']} 学期={params['xkxqm']} "
+              f"轮次={params['xklc']}")
+        print(f"[页面] 课程类型 tabs: {list(tabs.keys())}")
+        print(f"[页面] 选课窗口: {params.get('xkkssj', '未知')} ~ "
+              f"{params.get('xkjssj', '未知')}")
+        return params
+
+    def _fetch_display_time(self, tab_info: dict):
+        """从 Display 页面提取选课时间窗口"""
+        try:
+            data = {
+                "xkkz_id":  tab_info.get("xkkz_id", ""),
+                "kklxdm":   tab_info.get("kklxdm", "06"),
+                "njdm_id":  tab_info.get("njdm_id", ""),
+                "zyh_id":   tab_info.get("zyh_id", ""),
+                "xszxzt":   self._page_params.get("xszxzt", "1"),
+                "kspage":   "0",
+                "jspage":   "0",
+            }
+            url = f"{self.XK_DISPLAY}?gnmkdm={self.config.gnmkdm}"
+            resp = self.post(url, data=data)
+            resp.encoding = "utf-8"
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            for fid in ["xkkssj", "xkjssj", "hdmc"]:
+                el = soup.find(attrs={"id": fid}) or soup.find(attrs={"name": fid})
+                if el and el.get("value"):
+                    self._page_params[fid] = el.get("value")
         except Exception:
             pass
-        await asyncio.sleep(2)
-        await self.connect()
 
-    async def close(self):
-        if self.ws:
-            try:
-                await self.ws.close()
-            except Exception:
-                pass
-            self.ws = None
+    # ============================================================
+    # 课程查询
+    # ============================================================
 
-    # ---- CDP 底层 ----
-
-    async def _send_cmd(self, method: str, params: dict | None = None) -> int:
-        mid = self._next_id()
-        payload = {"id": mid, "method": method}
-        if params:
-            payload["params"] = params
-        await self.ws.send(json.dumps(payload))
-        return mid
-
-    async def _recv_raw(self, timeout: float | None = None):
-        t = timeout or self.config.request_timeout
-        return json.loads(await asyncio.wait_for(self.ws.recv(), timeout=t))
-
-    async def _eval(self, expression: str, await_promise: bool = False):
-        mid = await self._send_cmd("Runtime.evaluate", {
-            "expression": expression,
-            "returnByValue": True,
-            "awaitPromise": await_promise,
-        })
-        while True:
-            msg = await self._recv_raw()
-            if msg.get("id") == mid:
-                result = msg.get("result", {})
-                if "exceptionDetails" in result:
-                    d = result["exceptionDetails"]
-                    raise ApiError(f"JS: {d.get('text', d.get('description', '?'))}")
-                return result.get("result", {}).get("value")
-
-    async def _iframe_eval(self, expression: str, await_promise: bool = False):
-        return await self._eval(
-            f"(function(){{var doc={self._iframe_doc};{expression}}})()",
-            await_promise=await_promise,
-        )
-
-    # ---- API 调用 ----
-
-    async def sync_post(self, path: str, data: dict):
-        """在 iframe 中同步 POST（复用浏览器登录态）"""
-        data_js = json.dumps(data, ensure_ascii=False)
-        raw = await self._iframe_eval(f"""
-            var xhr = new doc.defaultView.XMLHttpRequest();
-            xhr.open('POST', '{path}', false);
-            xhr.setRequestHeader('Content-Type','application/x-www-form-urlencoded');
-            var body = new doc.defaultView.URLSearchParams({data_js}).toString();
-            try {{
-                xhr.send(body);
-                return xhr.responseText;
-            }} catch(e) {{
-                return JSON.stringify({{error: e.message}});
-            }}
-        """)
-        if raw:
-            try:
-                return json.loads(raw)
-            except (json.JSONDecodeError, TypeError):
-                return raw
-        return None
-
-    async def get_page_params(self) -> dict:
-        raw = await self._iframe_eval("""
-            return JSON.stringify({
-                xkkz_id:  (doc.querySelector('#xkkz_id')||{}).value || '',
-                xkxnm:    (doc.querySelector('#xkxnm')||{}).value || '',
-                xkxqm:    (doc.querySelector('#xkxqm')||{}).value || '',
-                xklc:     (doc.querySelector('#xklc')||{}).value || '',
-                rwlx:     (doc.querySelector('#rwlx')||{}).value || '',
-                rlkz:     (doc.querySelector('#rlkz')||{}).value || '0',
-                cdrlkz:   (doc.querySelector('#cdrlkz')||{}).value || '0',
-                rlzlkz:   (doc.querySelector('#rlzlkz')||{}).value || '1',
-                kklxdm:   (doc.querySelector('#kklxdm')||{}).value || '06',
-                njdm_id:  (doc.querySelector('#njdm_id')||{}).value || '2025',
-                zyh_id:   (doc.querySelector('#zyh_id')||{}).value || '',
-            });
-        """)
-        return json.loads(raw) if raw else {}
-
-    async def switch_tab(self, keyword: str):
-        result = await self._iframe_eval(f"""
-            var tabs = doc.querySelectorAll('.nav-tabs li a');
-            for (var i = 0; i < tabs.length; i++)
-                if (tabs[i].innerText.indexOf('{keyword}') >= 0) {{ tabs[i].click(); return 'OK'; }}
-            return 'NOT FOUND';
-        """)
-        if result == "NOT FOUND":
-            raise ApiError(f"未找到 tab: {keyword}")
-        await asyncio.sleep(self.config.tab_switch_delay)
-
-    async def find_course(self, jxbbh: str) -> dict | None:
-        result_json = await self._iframe_eval(f"""
-            var links = doc.querySelectorAll('a[onclick*="showJcInfo"]');
-            var found = null;
-            links.forEach(function(a) {{
-                if (a.innerText.trim() === '{jxbbh}') {{
-                    var tr = a.closest('tr');
-                    if (!tr) return;
-                    var btn = tr.querySelector('button[id^="btn-xk-"]');
-                    if (!btn) return;
-                    var m = btn.getAttribute('onclick')
-                        .match(/insertGwcZzxk\\('([^']+)','([^']+)','([^']+)','([^']+)'\\)/);
-                    if (m) found = {{jxb_id:m[1], encrypted_jxb_ids:m[2], kch_id:m[3], jxbzls:m[4]}};
-                }}
-            }});
-            return JSON.stringify(found);
-        """)
-        return json.loads(result_json) if result_json else None
-
-    async def open_cart(self):
-        await self._iframe_eval("doc.querySelector('#btn_gwc').click();")
-        await asyncio.sleep(self.config.cart_modal_delay)
-
-    async def find_submit_button(self) -> dict | None:
-        result = await self._eval("""
-            JSON.stringify(
-                Array.from(document.querySelectorAll(
-                    '.bootbox-body button, .modal-body button, .bootbox .btn, .modal .btn'
-                )).filter(function(b) { return b.offsetHeight > 0; })
-                .map(function(b) { return {text:(b.innerText||'').trim(), id:b.id}; })
-            )
-        """)
-        buttons = json.loads(result) if result else []
-        for b in buttons:
-            if b.get("text", "") in ("提交", "确认", "一键提交", "确认提交"):
-                return b
-        return buttons[-1] if buttons else None
-
-    async def click_button_by_text(self, text: str):
-        await self._eval(f"""
-            var btns = document.querySelectorAll('.bootbox-body button, .modal-body button');
-            for (var i = 0; i < btns.length; i++)
-                if (btns[i].innerText.trim() === '{text}') {{ btns[i].click(); return; }}
-        """)
-
-    async def click_button_by_id(self, bid: str):
-        await self._eval(f"document.querySelector('#{bid}').click();")
-
-    async def check_visible_alerts(self) -> list:
-        result = await self._eval("""
-            JSON.stringify(
-                Array.from(document.querySelectorAll('.bootbox-alert, .bootbox-body'))
-                .filter(function(a) { return a.offsetHeight > 0; })
-                .map(function(v) { return (v.innerText || '').trim().substring(0, 200); })
-            )
-        """)
+    def query_courses(self, tab_info: dict, page_params: dict | None = None) -> list:
+        """按课程类型查询可选课程，返回课程列表"""
+        pp = dict(page_params or self._page_params or {})
+        data = {
+            "xkkz_id":  tab_info.get("xkkz_id", pp.get("firstXkkzId", "")),
+            "kklxdm":   tab_info.get("kklxdm", "06"),
+            "njdm_id":  tab_info.get("njdm_id", pp.get("njdm_id", "")),
+            "zyh_id":   tab_info.get("zyh_id", pp.get("zyh_id", "")),
+            "xkxnm":    pp.get("xkxnm", ""),
+            "xkxqm":    pp.get("xkxqm", ""),
+            "xklc":     pp.get("xklc", "1"),
+            "rwlx":     pp.get("rwlx", "3"),
+            "xszxzt":   pp.get("xszxzt", "1"),
+            "xkkz_xh":  tab_info.get("xkkz_xh", ""),
+            "xxkbj":    "0",
+            "qz":       "0",
+            "cxbj":     "0",
+            "kspage":   "0",
+            "jspage":   "500",
+        }
+        url = f"{self.XK_PART_DISPLAY}?gnmkdm={self.config.gnmkdm}"
+        resp = self.post(url, data=data)
+        resp.encoding = "utf-8"
         try:
-            alerts = json.loads(result) if result else []
-            return [a for a in alerts if a]
+            result = resp.json()
+            return result.get("tmpList", [])
         except Exception:
             return []
 
-    async def get_server_time(self) -> str | None:
+    def find_course(self, courses: list, jxbbh: str) -> dict | None:
+        """从课程列表中按 jxbmc 精确匹配目标课程"""
+        for c in courses:
+            if c.get("jxbmc") == jxbbh:
+                return {
+                    "jxb_id":  c["jxb_id"],
+                    "kch_id":  c.get("kch_id", ""),
+                    "kch":     c.get("kch", ""),
+                    "kcmc":    c.get("kcmc", ""),
+                    "jxbzls":  c.get("jxbzls", "1"),
+                    "jxbmc":   c.get("jxbmc", ""),
+                    "kklxdm":  c.get("kklxdm", ""),
+                }
+        return None
+
+    # ============================================================
+    # 选课 API
+    # ============================================================
+
+    def check_in_cart(self, jxb_id: str) -> bool:
+        """检查课程是否已在购物车"""
+        url = f"{self.XK_CHECK_CART}?gnmkdm={self.config.gnmkdm}"
+        resp = self.post(url, data={"jxb_id": jxb_id})
         try:
-            return await self._iframe_eval(r"""
-                var body = doc.body ? doc.body.innerText : '';
-                var m = body.match(/选课时间[：:]\s*(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})/);
-                return m ? m[1] : null;
-            """)
+            return resp.text.strip() == '"2"'
         except Exception:
-            return None
+            return False
+
+    def quick_select(self, jxb_ids: str) -> dict:
+        """一键选课（直接提交，跳过购物车）
+
+        Args:
+            jxb_ids: 单个 jxb_id 或多个用逗号分隔
+        """
+        params = self._page_params or {}
+        data = {
+            "xkkz_id":  params.get("firstXkkzId", ""),
+            "jxb_ids":  jxb_ids,
+            "kklxdm":   params.get("firstKklxdm", "06"),
+            "njdm_id":  params.get("njdm_id", ""),
+            "zyh_id":   params.get("zyh_id", ""),
+            "xkxnm":    params.get("xkxnm", ""),
+            "xkxqm":    params.get("xkxqm", ""),
+            "rwlx":     params.get("rwlx", "3"),
+            "xklc":     params.get("xklc", "1"),
+        }
+        url = f"{self.XK_QUICKLY}?gnmkdm={self.config.gnmkdm}"
+        resp = self.post(url, data=data)
+        try:
+            return resp.json()
+        except Exception:
+            return {"error": resp.text}
+
+    def get_cart_contents(self) -> list:
+        """查询购物车内容"""
+        url = f"{self.XK_QUERY_CART}?gnmkdm={self.config.gnmkdm}&doType=query"
+        resp = self.post(url)
+        try:
+            return resp.json()
+        except Exception:
+            return []
+
+    def close(self):
+        """关闭会话"""
+        self.session.close()
