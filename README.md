@@ -1,80 +1,103 @@
-# 华农教务系统自动选课
+# 华农选课助手
 
-华南农业大学正方教务系统 V9.0 自动选课脚本。纯 HTTP 请求方案，无需浏览器，通过 RSA 加密登录后直接调用 API 完成一键选课。
+华南农业大学正方教务系统自动选课工具。
 
-项目仅供学习参考，出现任何问题后果自负。
+> 纯 HTTP 请求，无需浏览器。仅供学习参考，使用后果自负。
 
-## 借鉴项目
+## 是什么
 
-- [new-school-sdk](https://github.com/FarmerChillax/new-school-sdk) — 参考了 `requests.Session` 会话管理、RSA 密码加密（PyRsa 模块）以及正方教务系统的登录流程
-- [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective) — 参考了 HTTP 客户端设计模式、Session cookie 持久化以及选课 API 的调用方式
+华农选课助手是一个基于 HTTP 请求的自动选课脚本，通过分析教务系统 API，在选课窗口开启瞬间以最低延迟完成课程提交。
 
-## 原理
+### 核心设计：三模块解耦
 
-1. 直接 HTTP POST 登录教务系统（RSA 加密密码），获取 Session
-2. 通过 PartDisplay API 查询所有可选课程，按教学班编号精确匹配目标
-3. 提取服务器选课开始时间，实时倒计时
-4. 窗口开启时调用 Quickly API 一键选课（支持多门课程批量提交）
+| 模块 | 职责 | 时机 |
+| --- | --- | --- |
+| 预绑定器 | 搜索课程，缓存加密 ID 到本地 | 开抢前 5~10 分钟 |
+| 抢课核心 | 读缓存，仅 2 步（加购→提交），跳过冗余检查 | 窗口归零瞬间 |
+| 捡漏器 | 定时轮询空位，发现即提交 | 开抢后持续运行 |
 
-相比旧版 CDP（Chrome DevTools Protocol）方案，无需启动浏览器、无需 WebSocket，更稳定、更快速。
+相比传统方案：跳过"搜索课程"和"检查购物车"两步，同等多课程使用独立 Session 并发提交。
 
-## 环境要求
+## 怎么用
 
-- Python 3.10+
-- 能访问华农教务系统的网络环境（校园网或 VPN）
-
-## 安装
+### 安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 配置
-
-修改 [course_bot/config.py](course_bot/config.py) 中的配置项：
-
-```python
-# 账号
-student_id: str = "你的学号"
-password: str = "你的密码"
-
-# 目标课程：jxbbh 为教学班编号，kklxdm 为课程类型代码
-# 体育=06, 大学英语=09, 专业课=01, 通识=05 等
-target_courses: list = field(default_factory=lambda: [
-    {"jxbbh": "202620271-610023-001-乒乓球02", "kklxdm": "06"},
-    {"jxbbh": "202620271-604792-005",         "kklxdm": "09"},
-])
-
-# 教务系统地址（默认外网，校园网可用内网 10.42.100.1）
-base_url: str = "https://jwzf.scau.edu.cn"
-
-# 选课时间窗口（优先使用服务器端时间，此处为兜底配置）
-window_open: str = "2026-06-18 12:29:55"
-```
-
-> **如何找到 jxbbh？** 在教务系统"自主选课"页面，搜索目标课程，课程名称旁边显示的那串编号即为 jxbbh。
-
-## 使用
+### 配置
 
 ```bash
-# 自动匹配课程 + 等窗口一键选课
-python -m course_bot.main
-
-# 自定义选课时间
-python -m course_bot.main --window "2026-06-18 12:29:55"
+cp course_bot/config.example.py course_bot/config.py
 ```
 
-## 运行流程
+编辑 `course_bot/config.py`，填入：
 
-1. 脚本登录教务系统，获取 Session
-2. 查询可选课程列表，匹配目标课程
-3. 提取服务器端选课开始时间，精确倒计时
-4. 倒计时结束立即调用 Quickly API 一键选课
-5. 若服务器返回"时间未到"则自动轮询重试，最多 5 分钟
+- `student_id` / `password` — 教务系统账号
+- `target_courses` — 目标课程的 `jxbbh`（教学班编号）和 `kklxdm`（01=专业选修课，06=板块课）
+- `window_open` / `window_close` — 选课时间窗口
 
-## 注意事项
+### 运行
 
-- 脚本仅在本地运行，不经过第三方服务器
-- 选课窗口时间以服务器端 `xkkssj` 为准，配置中的 `window_open` 仅为兜底
-- 按 `Ctrl+C` 可安全退出
-- 校园网环境建议使用内网地址 `http://10.42.100.1` 以获得更低延迟
+#### 一键启动（推荐）
+
+```bash
+python run.py
+```
+
+自动启动后端服务并打开浏览器，在界面中完成登录→扫描→预绑定→抢课全流程。
+
+#### 命令行模式
+
+```bash
+python -m course_bot.main prebind   # 预绑定：搜索课程并缓存 ID
+python -m course_bot.main snipe     # 抢课核心：读缓存→乐观提交
+python -m course_bot.main hunt      # 捡漏器：轮询空位（测试功能）
+python -m course_bot.main serve     # 仅启动后端服务
+```
+
+#### 完整自动流程
+
+```bash
+python -m course_bot.main all --window "2026-06-18 12:29:55"
+```
+
+### 测试
+
+```bash
+python -m course_bot.mock_server --port 8080   # 启动模拟教务系统
+python -m pytest course_bot/tests/ -v          # 运行测试
+```
+
+## 项目结构
+
+```text
+course_bot/
+├── config.example.py   # 配置模板（复制为 config.py）
+├── main.py             # CLI 入口
+├── server.py           # FastAPI 后端服务
+├── static/index.html   # 前端页面
+├── prebind.py          # 预绑定器
+├── sniper.py           # 抢课核心（乐观提交）
+├── hunter.py           # 独立捡漏器
+├── concurrent.py       # 多 Session 并发管理
+├── client.py           # HTTP 客户端
+├── course.py           # 旧版流程编排（保留兼容）
+├── errors.py           # 错误码
+├── logger.py           # 日志模块
+├── PyRsa/              # RSA 加密
+├── mock_server/        # 本地模拟教务系统（FastAPI）
+└── tests/              # 测试用例
+run.py                  # 一键启动脚本
+```
+
+## 借鉴
+
+- [new-school-sdk](https://github.com/FarmerChillax/new-school-sdk) — RSA 加密、登录流程
+- [PKUAutoElective](https://github.com/zhongxinghong/PKUAutoElective) — HTTP 客户端设计
+- SCAU-course-tool — 购物车并发抢课模式
+
+## 许可
+
+AGPL-3.0

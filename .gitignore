@@ -4,4 +4,8 @@ __pycache__/
 .venv/
 venv/
 .env
-plan.md
+logs/
+test_results/
+frontend/
+course_bot/config.py
+cache.json

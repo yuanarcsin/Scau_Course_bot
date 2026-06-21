@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
+<title>选课助手</title>
+<style>
+/* ============================================================
+   iOS-style 选课助手 — 简洁 · 克制 · 精致
+   ============================================================ */
+
+* { margin:0; padding:0; box-sizing:border-box; }
+:root {
+  --bg:        #f2f2f7;
+  --card:      #ffffff;
+  --sep:       #e5e5ea;
+  --text:      #1c1c1e;
+  --text2:     #6e6e73;
+  --text3:     #aeaeb2;
+  --blue:      #007aff;
+  --blue-bg:   #e8f2ff;
+  --red:       #ff3b30;
+  --red-bg:    #ffe5e3;
+  --green:     #34c759;
+  --green-bg:  #dff7e5;
+  --orange:    #ff9500;
+  --orange-bg: #fff3e0;
+  --radius:    12px;
+  --radius-sm: 8px;
+  --shadow:    0 1px 3px rgba(0,0,0,.04), 0 1px 2px rgba(0,0,0,.06);
+  --font: -apple-system, 'SF Pro Display', 'PingFang SC', 'Helvetica Neue', sans-serif;
+  --font-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
+}
+html, body { height:100%; overflow:hidden; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  display:flex; flex-direction:column;
+}
+/* ----------------------------------------------------------
+   NAV BAR — frosted glass
+   ---------------------------------------------------------- */
+.nav {
+  background: rgba(255,255,255,.72);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: .5px solid rgba(0,0,0,.08);
+  padding: 12px 16px; display:flex; align-items:center; gap:12px;
+  flex-shrink:0; z-index:100;
+}
+.nav-title { font-size:18px; font-weight:700; letter-spacing:-.2px; flex:1; }
+.nav-dot {
+  width:10px; height:10px; border-radius:50%;
+  background: var(--text3); transition: background .4s, box-shadow .4s;
+}
+.nav-dot.on { background: var(--green); box-shadow:0 0 6px rgba(52,199,89,.35); }
+.nav-dot.off { background: var(--red); box-shadow:0 0 6px rgba(255,59,48,.35); }
+.nav-status { font-size:12px; color: var(--text2); }
+
+/* ----------------------------------------------------------
+   SCROLLABLE MAIN
+   ---------------------------------------------------------- */
+main {
+  flex:1; overflow-y:auto; padding:12px 16px 20px;
+  display:flex; flex-direction:column; gap:12px;
+  -webkit-overflow-scrolling: touch;
+}
+/* ----------------------------------------------------------
+   CARDS
+   ---------------------------------------------------------- */
+.card {
+  background: var(--card); border-radius: var(--radius);
+  padding: 16px; box-shadow: var(--shadow);
+  animation: card-in .35s ease-out both;
+}
+@keyframes card-in { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+.card-sm { padding: 14px 16px; }
+.card-title {
+  font-size:13px; font-weight:600; color: var(--text2);
+  text-transform:uppercase; letter-spacing:.4px; margin-bottom:12px;
+}
+/* ----------------------------------------------------------
+   FORM ROW
+   ---------------------------------------------------------- */
+.form-row { display:flex; gap:8px; align-items:center; }
+.input {
+  flex:1; height:38px; border:1px solid #dcdce0; border-radius: var(--radius-sm);
+  padding:0 12px; font-size:15px; font-family: var(--font); color: var(--text);
+  background: #fafafa; outline:none; transition: border .2s, box-shadow .2s;
+  -webkit-appearance: none;
+}
+.input:focus { border-color: var(--blue); box-shadow:0 0 0 3px rgba(0,122,255,.12); background:#fff; }
+.input.mono { font-family: var(--font-mono); font-size:13px; }
+/* ----------------------------------------------------------
+   BUTTONS
+   ---------------------------------------------------------- */
+.btn {
+  font-family: var(--font); font-size:15px; font-weight:500;
+  border:none; border-radius: var(--radius-sm); padding:9px 18px;
+  cursor:pointer; transition: all .15s; letter-spacing:-.1px;
+  white-space:nowrap; -webkit-tap-highlight-color:transparent;
+  position:relative; overflow:hidden;
+}
+.btn:active { transform: scale(.97); }
+.btn:disabled { opacity:.35; pointer-events:none; }
+.btn-blue  { background:var(--blue); color:#fff; }
+.btn-red   { background:var(--red);  color:#fff; }
+.btn-green { background:var(--green); color:#fff; }
+.btn-outline { background:transparent; border:1.5px solid var(--blue); color:var(--blue); }
+.btn-outline-red  { border-color:var(--red); color:var(--red); }
+.btn-outline-warn { border:1.5px dashed var(--orange); color:var(--orange); }
+.btn-sm { font-size:13px; padding:6px 14px; }
+.btn-xs { font-size:11px; padding:4px 10px; border-radius:6px; }
+/* ----------------------------------------------------------
+   TABLE
+   ---------------------------------------------------------- */
+.tbl-wrap { max-height:240px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+.tbl { width:100%; border-collapse:collapse; font-size:13px; }
+.tbl th { text-align:left; padding:8px 6px; font-size:11px; font-weight:600; color:var(--text3); text-transform:uppercase; letter-spacing:.3px; border-bottom:1px solid var(--sep); position:sticky; top:0; background:#fff; }
+.tbl td { padding:9px 6px; border-bottom:.5px solid var(--sep); }
+.tbl tr { transition: background .12s; cursor:pointer; }
+.tbl tr:active { background: var(--blue-bg); }
+.tbl tr.sel td { background: rgba(0,122,255,.06); }
+.tbl .c-num { width:20px; text-align:center; font-size:11px; color:var(--text3); }
+.tbl .c-name { font-weight:500; }
+.tbl .c-code { font-family:var(--font-mono); font-size:11px; color:var(--text2); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+
+/* ----------------------------------------------------------
+   TARGETS
+   ---------------------------------------------------------- */
+.add-row { display:flex; gap:8px; margin-bottom:10px; }
+.tag-list { display:flex; flex-direction:column; gap:6px; max-height:180px; overflow-y:auto; }
+.tag {
+  display:flex; align-items:center; gap:8px;
+  background:#f9f9fb; border-radius:var(--radius-sm);
+  padding:8px 12px; transition:background .15s;
+}
+.tag:active { background: #f0f0f5; }
+.tag-text { flex:1; font-family:var(--font-mono); font-size:12px; color:var(--text); word-break:break-all; min-width:0; }
+.tag-dot {
+  font-size:10px; font-weight:600; padding:3px 9px; border-radius:20px; white-space:nowrap;
+}
+.tag-pending { background:#f2f2f7; color:var(--text3); }
+.tag-ok      { background:var(--green-bg); color:var(--green); }
+.tag-fail    { background:var(--red-bg);  color:var(--red); }
+.tag-del {
+  background:none; border:none; font-size:18px; color:var(--text3);
+  cursor:pointer; padding:0 4px; line-height:1;
+}
+.tag-del:active { color:var(--red); }
+
+/* ----------------------------------------------------------
+   COUNTDOWN
+   ---------------------------------------------------------- */
+.cd-row { display:flex; align-items:center; gap:12px; margin-bottom:12px; }
+.cd-row .cd-label { font-size:11px; color:var(--text3); text-transform:uppercase; letter-spacing:.6px; }
+.cd-row .cd-time {
+  font-family: var(--font-mono); font-size:30px; font-weight:600;
+  color: var(--text); letter-spacing:1px; flex:1;
+}
+.cd-row input {
+  width:72px; height:30px; border:1px solid #dcdce0; border-radius:6px;
+  font-size:13px; font-family:var(--font-mono); text-align:center; color:var(--text2);
+  background:#fafafa; outline:none;
+}
+.cd-row input:focus { border-color: var(--blue); }
+
+.act-row { display:flex; gap:8px; flex-wrap:wrap; }
+.chip {
+  font-size:10px; font-weight:600; color:var(--orange); border:1px dashed var(--orange);
+  padding:1px 7px; border-radius:4px; vertical-align:middle; margin-left:4px;
+}
+
+/* ----------------------------------------------------------
+   LOG
+   ---------------------------------------------------------- */
+.log-wrap { max-height:260px; overflow-y:auto; -webkit-overflow-scrolling:touch; }
+.log-entry {
+  padding:3px 0; font-family:var(--font-mono); font-size:11px; line-height:1.55;
+  border-bottom:.5px solid #f0f0f3; animation:log-in .18s ease-out;
+}
+@keyframes log-in { from { opacity:0; transform:translateX(-6px); } }
+.log-ts { color:var(--text3); margin-right:8px; }
+.log-m { color:var(--text2); }
+.log-s { color:var(--green); }
+.log-e { color:var(--red); }
+.log-w { color:var(--orange); }
+.log-b { color:var(--blue); }
+
+/* ----------------------------------------------------------
+   TOAST
+   ---------------------------------------------------------- */
+.toast-ct {
+  position:fixed; top:60px; left:50%; transform:translateX(-50%);
+  z-index:9999; display:flex; flex-direction:column; gap:6px;
+  pointer-events:none;
+}
+.toast {
+  padding:10px 20px; border-radius:20px; font-size:14px; font-weight:500;
+  background:rgba(28,28,30,.9); color:#fff; backdrop-filter:blur(10px);
+  animation: toast-in .3s ease-out;
+  text-align:center; max-width:300px;
+}
+.toast.e { background:rgba(255,59,48,.92); }
+.toast.s { background:rgba(52,199,89,.92); }
+@keyframes toast-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+
+/* loading pulse */
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } }
+.skel { animation:pulse 1.5s ease-in-out infinite; background:#e5e5ea; border-radius:4px; height:12px; width:60%; display:inline-block; }
+
+/* ----------------------------------------------------------
+   MOBILE
+   ---------------------------------------------------------- */
+@media (max-width:540px) {
+  main { padding:8px 10px 16px; gap:10px; }
+  .card { padding:14px; }
+  .form-row { flex-direction:column; }
+  .tbl-wrap { max-height:160px; }
+  .act-row { gap:6px; }
+  .log-wrap { max-height:180px; }
+}
+</style>
+</head>
+<body>
+
+<!-- NAV -->
+<div class="nav">
+  <span class="nav-title">选课助手</span>
+  <span class="nav-status" id="navLabel">等待服务</span>
+  <span class="nav-dot" id="navDot"></span>
+</div>
+
+<!-- MAIN -->
+<main id="mainContent">
+
+  <!-- LOGIN CARD -->
+  <div class="card card-sm" id="loginCard" style="animation-delay:.05s">
+    <div class="card-title">登录</div>
+    <div class="form-row">
+      <input class="input" type="text" id="sidInput" placeholder="学号" autocomplete="off">
+      <input class="input" type="password" id="pwdInput" placeholder="密码" autocomplete="off" style="max-width:120px">
+      <button class="btn btn-blue" id="loginBtn" onclick="doLogin()">登录</button>
+    </div>
+  </div>
+
+  <!-- COURSE CARD -->
+  <div class="card" id="courseCard" style="animation-delay:.12s">
+    <div class="card-title" style="display:flex;align-items:center;gap:10px;">
+      课程仓库
+      <button class="btn btn-outline btn-xs" id="scanBtn" onclick="doScan()" disabled>扫描</button>
+      <span id="courseCount" style="font-size:12px;color:var(--text3);margin-left:auto;"></span>
+    </div>
+    <div class="add-row">
+      <input class="input" type="text" id="searchInput" placeholder="搜索课程..." oninput="filterTable()" style="flex:1">
+    </div>
+    <div class="tbl-wrap">
+      <table class="tbl" id="courseTable">
+        <thead><tr><th class="c-num"></th><th>编号</th><th>课程名</th><th>教师</th><th>容量</th></tr></thead>
+        <tbody id="courseTbody"><tr><td colspan="5" style="color:var(--text3);text-align:center;padding:20px;">登录后扫描课程</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- TARGET CARD -->
+  <div class="card card-sm" id="targetCard" style="animation-delay:.18s">
+    <div class="card-title" style="display:flex;align-items:center;gap:10px;">
+      目标清单
+      <button class="btn btn-outline btn-xs" id="prebindBtn" onclick="doPrebind()" disabled>预绑定</button>
+      <span id="prebindStatus" style="font-size:11px;color:var(--text3);margin-left:auto;"></span>
+    </div>
+    <div class="add-row">
+      <input class="input mono" type="text" id="targetInput" placeholder="教学班编号" onkeydown="if(event.key==='Enter')addTarget()">
+      <button class="btn btn-outline btn-sm" onclick="addTarget()">添加</button>
+      <button class="btn btn-outline btn-sm" onclick="importSelected()" style="font-size:11px">导入勾选</button>
+      <button class="btn btn-outline btn-sm" onclick="clearTargets()" style="font-size:11px;color:var(--text3);border-color:var(--text3)">清空</button>
+    </div>
+    <div class="tag-list" id="targetList"><div style="color:var(--text3);font-size:13px;padding:10px 0;text-align:center;">添加目标课程或从仓库导入</div></div>
+  </div>
+
+  <!-- ACTION CARD -->
+  <div class="card card-sm" id="actionCard" style="animation-delay:.24s">
+    <div class="card-title">操作</div>
+    <div class="cd-row">
+      <span class="cd-label">目标时间</span>
+      <input type="text" id="dateInput" value="2026-06-21">
+      <input type="text" id="timeInput" value="12:30:00" style="width:64px">
+      <span class="cd-time" id="countdown">--:--:--</span>
+    </div>
+    <div class="act-row">
+      <button class="btn btn-blue" id="seizeBtn" onclick="doSeize()" disabled>启动抢课</button>
+      <button class="btn btn-outline-warn" id="huntBtn" onclick="doHunt()" disabled>捡漏 <span class="chip">测试</span></button>
+      <button class="btn btn-outline-red btn-sm" id="stopBtn" onclick="doStop()" disabled>停止</button>
+    </div>
+    <div id="statusBar" style="margin-top:10px;font-size:12px;color:var(--text3);">就绪 · 请先登录</div>
+  </div>
+
+  <!-- LOG CARD -->
+  <div class="card card-sm" id="logCard" style="animation-delay:.3s">
+    <div class="card-title" style="display:flex;align-items:center;justify-content:space-between;">
+      日志
+      <button class="btn btn-outline btn-xs" onclick="clearLogs()" style="color:var(--text3);border-color:var(--text3)">清空</button>
+    </div>
+    <div class="log-wrap" id="logBody"><div class="log-entry"><span class="log-ts">--:--:--</span> <span class="log-m">正在连接服务...</span></div></div>
+  </div>
+
+</main>
+
+<div class="toast-ct" id="toastCt"></div>
+
+<script>
+// ============================================================
+// STATE
+// ============================================================
+const API = 'http://127.0.0.1:8742';
+let courses = [], targets = [];
+let loggedIn = false, sse = null;
+let connectRetries = 0;
+let seizing = false, hunting = false;
+
+// ============================================================
+// HELPERS
+// ============================================================
+const $ = id => document.getElementById(id);
+function T(msg, cls) {
+  const ct = $('toastCt');
+  const el = document.createElement('div');
+  el.className = 'toast ' + (cls||'');
+  el.textContent = msg;
+  ct.appendChild(el);
+  setTimeout(() => { el.style.opacity='0'; el.style.transition='opacity .25s'; setTimeout(()=>el.remove(),300); }, 2800);
+}
+function L(ts, msg, cls) {
+  const b = $('logBody');
+  const d = document.createElement('div');
+  d.className = 'log-entry';
+  d.innerHTML = `<span class="log-ts">${ts||'--:--:--'}</span> <span class="${cls||'log-m'}">${msg}</span>`;
+  b.appendChild(d);
+  b.scrollTop = b.scrollHeight;
+}
+function navOn()  { $('navDot').className='nav-dot on'; $('navLabel').textContent='已连接'; }
+function navOff() { $('navDot').className='nav-dot off'; $('navLabel').textContent='未连接'; }
+function navWait(){ $('navDot').className='nav-dot'; $('navLabel').textContent='等待服务'; }
+
+function updateUI() {
+  const ok = targets.filter(t=>t.status==='ok').length;
+  $('scanBtn').disabled = !loggedIn;
+  $('prebindBtn').disabled = !loggedIn || targets.length===0;
+  $('seizeBtn').disabled = !loggedIn || ok===0 || seizing || hunting;
+  $('huntBtn').disabled = !loggedIn || ok===0 || seizing || hunting;
+  $('stopBtn').disabled = !(seizing || hunting);
+  $('prebindStatus').textContent = targets.length ? `${ok}/${targets.length} 已绑定` : '';
+  if (seizing) $('statusBar').textContent = '抢课中...';
+  else if (hunting) $('statusBar').textContent = '捡漏中（测试功能）...';
+  else if (loggedIn) $('statusBar').textContent = ok ? `就绪 · ${ok} 门课程已预绑定` : '就绪 · 请执行预绑定';
+  else $('statusBar').textContent = '就绪 · 请先登录';
+}
+
+// ============================================================
+// BACKEND CONNECTION — auto-retry
+// ============================================================
+async function probeBackend() {
+  try {
+    const r = await fetch(API + '/api/status', { signal: AbortSignal.timeout(2000) });
+    if (r.ok) { connectRetries=0; navOn(); connectSSE(); return true; }
+  } catch(_) {}
+  connectRetries++;
+  navOff();
+  if (connectRetries <= 1) L('', '等待服务启动... 请运行 python -m course_bot.main serve', 'log-w');
+  else if (connectRetries % 5 === 0) L('', `重试连接... (${connectRetries})`, 'log-m');
+  setTimeout(probeBackend, 2000);
+  return false;
+}
+
+// ============================================================
+// SSE
+// ============================================================
+function connectSSE() {
+  if (sse) sse.close();
+  sse = new EventSource(API + '/api/events');
+  sse.onopen = () => navOn();
+  sse.onerror = () => { navOff(); setTimeout(() => { if (sse) { sse.close(); connectSSE(); } }, 3000); };
+  sse.onmessage = e => {
+    try { handleSSE(JSON.parse(e.data)); } catch(_) {}
+  };
+}
+function handleSSE(d) {
+  switch(d.type) {
+    case 'connected': navOn(); break;
+    case 'login': if (d.data?.ok) L(d.ts, '登录成功', 'log-s'); break;
+    case 'scan': if (d.data) { L(d.ts, `扫描完成: ${d.data.count} 门`, 'log-m'); $('courseCount').textContent = `${d.data.count} 门`; } break;
+    case 'prebind':
+      if (d.data) {
+        const cls = d.data.status==='ok'?'log-s':'log-e';
+        L(d.ts, `预绑定 ${d.data.jxbbh}: ${d.data.status}${d.data.kcmc?' → '+d.data.kcmc:''}`, cls);
+        updateTargetStatus(d.data.jxbbh, d.data.status==='ok'?'ok':'fail');
+      }
+      break;
+    case 'seize':
+      if (d.data) {
+        L(d.ts, `[抢课] ${d.data.jxbbh}: ${d.data.message}`, d.data.status==='success'?'log-s':'log-e');
+      }
+      break;
+    case 'log': L(d.ts, d.data, 'log-m'); break;
+    case 'stop':
+      L(d.ts, d.data?.message||'已停止', 'log-w');
+      seizing = false; hunting = false; updateUI();
+      break;
+    case 'ping': navOn(); break;
+  }
+}
+
+// ============================================================
+// API
+// ============================================================
+async function doLogin() {
+  const sid = $('sidInput').value.trim(), pwd = $('pwdInput').value.trim();
+  if (!sid||!pwd) { T('请输入学号和密码','e'); return; }
+  $('loginBtn').disabled = true; $('loginBtn').textContent = '登录中...';
+  try {
+    const r = await fetch(API+'/api/login', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({student_id:sid,password:pwd})});
+    const d = await r.json();
+    if (d.ok) {
+      loggedIn = true; updateUI();
+      $('loginBtn').textContent = '已登录'; T('登录成功','s');
+      $('sidInput').disabled = true; $('pwdInput').disabled = true;
+      setTimeout(() => doScan(), 600);
+    } else { T('登录失败: '+d.error,'e'); $('loginBtn').disabled = false; $('loginBtn').textContent = '登录'; }
+  } catch(e) { T('无法连接后端','e'); $('loginBtn').disabled = false; $('loginBtn').textContent = '登录'; }
+}
+async function doScan() {
+  if (!loggedIn) return;
+  $('scanBtn').disabled = true; $('scanBtn').textContent = '扫描中...';
+  L('', '扫描课程...', 'log-b');
+  try {
+    const r = await fetch(API+'/api/courses/scan');
+    const d = await r.json();
+    if (d.ok) { courses = d.courses||[]; renderTable(); $('courseCount').textContent = `${courses.length} 门`; }
+    else T('扫描失败: '+d.error,'e');
+  } catch(e) { T('扫描失败','e'); }
+  $('scanBtn').disabled = false; $('scanBtn').textContent = '扫描';
+}
+async function doPrebind() {
+  if (!targets.length) { T('请先添加目标课程','e'); return; }
+  $('prebindBtn').disabled = true; $('prebindBtn').textContent = '绑定中...';
+  targets.forEach(t => t.status='pending'); renderTargets(); updateUI();
+  L('', `预绑定 ${targets.length} 门...`, 'log-b');
+  try {
+    const r = await fetch(API+'/api/prebind', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jxbbhs:targets.map(t=>t.jxbbh)})});
+    const d = await r.json();
+    if (d.ok) { T(`预绑定完成: ${d.count} 门`,'s'); }
+    else T('预绑定失败: '+d.error,'e');
+  } catch(e) { T('预绑定失败','e'); }
+  $('prebindBtn').disabled = false; $('prebindBtn').textContent = '预绑定';
+}
+async function doSeize() {
+  if (!targets.filter(t=>t.status==='ok').length) { T('请先预绑定','e'); return; }
+  try {
+    const r = await fetch(API+'/api/seize/start', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) { seizing = true; updateUI(); T('抢课已启动','s'); }
+    else T(d.error,'e');
+  } catch(e) { T('请求失败','e'); }
+}
+async function doHunt() {
+  if (!targets.filter(t=>t.status==='ok').length) { T('请先预绑定','e'); return; }
+  try {
+    const r = await fetch(API+'/api/picker/start', {method:'POST'});
+    const d = await r.json();
+    if (d.ok) { hunting = true; updateUI(); T('捡漏器已启动（测试功能）','s'); }
+    else T(d.error,'e');
+  } catch(e) { T('请求失败','e'); }
+}
+async function doStop() {
+  try { await fetch(API+'/api/stop',{method:'POST'}); seizing=false; hunting=false; updateUI(); } catch(e) {}
+}
+
+// ============================================================
+// TABLE
+// ============================================================
+function renderTable() {
+  const tb = $('courseTbody');
+  tb.innerHTML = courses.map((c,i) => {
+    const sel = targets.some(t=>t.jxbbh===c.jxbmc);
+    return `<tr class="${sel?'sel':''}" ondblclick="pickCourse('${(c.jxbmc||'').replace(/'/g,"\\'")}')">
+      <td class="c-num">${sel?'&#9679;':''}</td>
+      <td class="c-code" title="${c.jxbmc||''}">${c.jxbmc||'?'}</td>
+      <td class="c-name">${c.kcmc||'?'}</td>
+      <td style="font-size:12px;color:var(--text2)">${c.jsxx||'-'}</td>
+      <td style="font-size:11px;color:var(--text2)">${c.yxzrs||'?'}/${c.jxbrs||'?'}</td>
+    </tr>`;
+  }).join('');
+  // click to toggle
+  tb.querySelectorAll('tr').forEach(tr => { tr.addEventListener('click', () => tr.classList.toggle('sel')); });
+}
+function pickCourse(jxbbh) {
+  if (jxbbh && !targets.some(t=>t.jxbbh===jxbbh)) {
+    targets.push({jxbbh, status:'pending'}); renderTargets(); renderTable(); updateUI();
+    T('已添加: '+jxbbh);
+  }
+}
+function filterTable() {
+  const kw = $('searchInput').value.toLowerCase();
+  $('courseTbody').querySelectorAll('tr').forEach(tr => {
+    tr.style.display = kw===''||tr.textContent.toLowerCase().includes(kw) ? '' : 'none';
+  });
+}
+
+// ============================================================
+// TARGETS
+// ============================================================
+function addTarget() {
+  const v = $('targetInput').value.trim();
+  if (!v) return;
+  if (targets.some(t=>t.jxbbh===v)) { T('已在列表中','e'); return; }
+  targets.push({jxbbh:v, status:'pending'});
+  renderTargets(); renderTable(); updateUI();
+  $('targetInput').value = '';
+}
+function removeTarget(jxbbh) { targets = targets.filter(t=>t.jxbbh!==jxbbh); renderTargets(); renderTable(); updateUI(); }
+function clearTargets() { targets=[]; renderTargets(); renderTable(); updateUI(); }
+function importSelected() {
+  let n=0;
+  $('courseTbody').querySelectorAll('tr.sel').forEach(tr => {
+    const jxbh = tr.querySelector('.c-code')?.textContent;
+    if (jxbh && !targets.some(t=>t.jxbbh===jxbh)) { targets.push({jxbbh:jxbh, status:'pending'}); n++; }
+  });
+  if (n) { renderTargets(); renderTable(); updateUI(); T(`导入 ${n} 门`); }
+}
+function updateTargetStatus(jxbbh, st) { const t = targets.find(t=>t.jxbbh===jxbbh); if(t) t.status=st; renderTargets(); updateUI(); }
+function renderTargets() {
+  const ct = $('targetList');
+  if (!targets.length) { ct.innerHTML = '<div style="color:var(--text3);font-size:13px;padding:10px 0;text-align:center;">添加目标课程或从仓库导入</div>'; return; }
+  ct.innerHTML = targets.map(t => {
+    let sc, st;
+    switch(t.status) { case 'ok': sc='tag-ok'; st='已缓存'; break; case 'fail': sc='tag-fail'; st='失败'; break; default: sc='tag-pending'; st='待提取'; }
+    return `<div class="tag"><span class="tag-text">${t.jxbbh}</span><span class="tag-dot ${sc}">${st}</span><button class="tag-del" onclick="removeTarget('${t.jxbbh}')">&times;</button></div>`;
+  }).join('');
+}
+
+// ============================================================
+// COUNTDOWN
+// ============================================================
+setInterval(() => {
+  const dt = $('dateInput').value + ' ' + $('timeInput').value;
+  const t = new Date(dt.replace(/-/g,'/'));
+  const d = Math.max(0,(t-Date.now())/1000);
+  if (isNaN(d)) { $('countdown').textContent='--:--:--'; return; }
+  const h=Math.floor(d/3600), m=Math.floor((d%3600)/60), s=Math.floor(d%60);
+  $('countdown').textContent = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  $('countdown').style.color = d<60 ? 'var(--red)' : d<300 ? 'var(--orange)' : 'var(--text)';
+}, 500);
+
+function clearLogs() { $('logBody').innerHTML = ''; }
+
+// BOOT
+navWait();
+L('', '连接后端服务...', 'log-b');
+probeBackend();
+</script>
+</body>
+</html>
