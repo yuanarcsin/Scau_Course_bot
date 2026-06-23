@@ -60,11 +60,14 @@ class EP:
 class Client:
     """教务系统 HTTP 客户端（同步登录 + 异步提交）"""
 
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, skip_logout_prev: bool = False):
         self.config = config
         self.base = config.base_url.rstrip("/")
         self._client: httpx.Client | None = None
         self._async_client: httpx.AsyncClient | None = None
+
+        # 是否跳过清理已有登录（保留浏览器 session）
+        self.skip_logout_prev = skip_logout_prev
 
         # 页面运行时参数（每次登录后刷新）
         self._csrf: str | None = None
@@ -159,7 +162,8 @@ class Client:
         hidden = {el.get("id") or el.get("name") or "": el.get("value", "")
                   for el in soup.find_all("input")}
         self._check_login_failure(hidden)
-        self._clear_previous_session()
+        if not self.skip_logout_prev:
+            self._clear_previous_session()
 
         # Step 4: 提交登录
         login_resp = self._post(
@@ -559,6 +563,25 @@ class Client:
             return resp.json()
         except Exception:
             return [{"flag": "-1", "msg": f"提交异常: {resp.text[:100]}"}]
+
+    def query_cart_courses(self) -> list[dict]:
+        """查询购物车中所有课程（参考 SCAU-course-tool）。
+        返回 [{xkgwcb_id, kcmc, jxbmc, kklxmc, ...}]"""
+        pp = self.page_params
+        data = {
+            "xkxnm":   pp.get("xkxnm", ""),
+            "xkxqm":   pp.get("xkxqm", ""),
+            "showCount": "100",
+            "kspage":  "0",
+            "jspage":  "100",
+            "sidx":    "zjsj",
+            "sord":    "asc",
+        }
+        resp = self._post(EP.XK_QUERY_CART + "?doType=query", data=data, gnmkdm=False)
+        try:
+            return resp.json().get("items", [])
+        except Exception:
+            return []
 
     def get_cart_items(self, kklxdm: str) -> list[dict]:
         """获取购物车中指定 kklxdm 的课程列表"""

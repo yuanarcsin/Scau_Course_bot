@@ -9,3 +9,4 @@ test_results/
 frontend/
 course_bot/config.py
 cache.json
+referance_tool/
